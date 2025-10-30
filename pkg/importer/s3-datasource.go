@@ -244,6 +244,14 @@ func getS3Client(endpoint, accessKey, secKey string, certDir string, urlScheme s
 
 func extractRegion(s string) string {
 	var region string
+
+	// Check if this is a transfer acceleration endpoint
+	if isTransferAccelerationEndpoint(s) {
+		// Transfer acceleration endpoints are global and don't contain region info
+		// Use the default region for transfer acceleration
+		return s3DefaultRegion
+	}
+
 	r, _ := regexp.Compile(`s3\.(.+)\.amazonaws\.com`)
 	if matches := r.FindStringSubmatch(s); matches != nil {
 		region = matches[1]
