@@ -24,6 +24,8 @@ const (
 	httpScheme                    = "http"
 	s3AccelerateEndpoint          = ".s3-accelerate.amazonaws.com"
 	s3AccelerateDualstackEndpoint = ".s3-accelerate.dualstack.amazonaws.com"
+	// s3DefaultRegion is used for transfer acceleration endpoints which are global
+	s3DefaultRegion = "us-east-1"
 )
 
 // S3Client is the interface to the used S3 client.
@@ -194,7 +196,6 @@ func getS3Client(endpoint, accessKey, secKey string, certDir string, urlScheme s
 	}
 
 	creds := credentials.NewStaticCredentials(accessKey, secKey, "")
-	region := extractRegion(endpoint)
 	disableSSL := false
 	// Disable SSL for http endpoint. This should cause the s3 client to create http requests.
 	if urlScheme == httpScheme {
@@ -204,18 +205,23 @@ func getS3Client(endpoint, accessKey, secKey string, certDir string, urlScheme s
 	var awsEndpoint *string
 	var s3UseAccelerate *bool
 	var s3ForcePathStyle *bool
+	var region string
 
 	if useAcceleration {
 		// For transfer acceleration, don't set endpoint and use virtual-hosted style
+		// Transfer acceleration endpoints are global, so we use the default region
+		// The actual region doesn't affect routing since acceleration is global
 		awsEndpoint = nil
 		s3UseAccelerate = aws.Bool(true)
 		s3ForcePathStyle = aws.Bool(false)
-		klog.V(1).Infof("Configuring S3 client with transfer acceleration")
+		region = s3DefaultRegion
+		klog.V(1).Infof("Configuring S3 client with transfer acceleration, using region %s", region)
 	} else {
-		// For path-style or custom endpoints, keep existing behavior
+		// For path-style or custom endpoints, extract region from endpoint
 		awsEndpoint = aws.String(endpoint)
 		s3UseAccelerate = aws.Bool(false)
 		s3ForcePathStyle = aws.Bool(true)
+		region = extractRegion(endpoint)
 	}
 
 	sess, err := session.NewSession(&aws.Config{

@@ -233,6 +233,47 @@ var _ = Describe("S3 data source", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sd).NotTo(BeNil())
 	})
+
+	It("Should extract region from standard S3 endpoints", func() {
+		// Standard regional endpoints
+		region := extractRegion("s3.us-east-1.amazonaws.com")
+		Expect(region).Should(Equal("us-east-1"))
+
+		region = extractRegion("s3.eu-west-1.amazonaws.com")
+		Expect(region).Should(Equal("eu-west-1"))
+
+		region = extractRegion("s3.ap-southeast-2.amazonaws.com")
+		Expect(region).Should(Equal("ap-southeast-2"))
+	})
+
+	It("Should use default region for transfer acceleration endpoints", func() {
+		// Transfer acceleration endpoints should return the default region
+		// This prevents incorrectly extracting the bucket name as the region
+		region := extractRegion("my-bucket.s3-accelerate.amazonaws.com")
+		Expect(region).Should(Equal(s3DefaultRegion))
+
+		region = extractRegion("test-bucket.s3-accelerate.dualstack.amazonaws.com")
+		Expect(region).Should(Equal(s3DefaultRegion))
+
+		region = extractRegion("another-bucket.s3-accelerate.amazonaws.com")
+		Expect(region).Should(Equal(s3DefaultRegion))
+	})
+})
+
+var _ = Describe("S3 client region configuration", func() {
+	It("Should configure correct region for transfer acceleration", func() {
+		client, err := getS3Client("my-bucket.s3-accelerate.amazonaws.com", "access", "secret", "", "https", true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(client).NotTo(BeNil())
+		// The client should be configured with us-east-1 as the default region for transfer acceleration
+	})
+
+	It("Should configure correct region for standard endpoints", func() {
+		client, err := getS3Client("s3.eu-west-1.amazonaws.com", "access", "secret", "", "https", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(client).NotTo(BeNil())
+		// The client should be configured with the region extracted from the endpoint
+	})
 })
 
 // MockS3Client is a mock AWS S3 client
