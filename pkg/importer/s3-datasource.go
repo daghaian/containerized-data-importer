@@ -20,8 +20,10 @@ import (
 )
 
 const (
-	s3FolderSep = "/"
-	httpScheme  = "http"
+	s3FolderSep                   = "/"
+	httpScheme                    = "http"
+	s3AccelerateEndpoint          = ".s3-accelerate.amazonaws.com"
+	s3AccelerateDualstackEndpoint = ".s3-accelerate.dualstack.amazonaws.com"
 )
 
 // S3Client is the interface to the used S3 client.
@@ -145,12 +147,28 @@ func createS3Reader(ep *url.URL, accessKey, secKey string, certDir string) (io.R
 	endpoint := ep.Host
 	urlScheme := ep.Scheme
 	klog.Infof("Endpoint %s", endpoint)
-	path := strings.Trim(ep.Path, "/")
-	bucket, object := extractBucketAndObject(path)
+
+	var bucket, object string
+	var useAcceleration bool
+
+	// Check if this is a transfer acceleration endpoint
+	if isTransferAccelerationEndpoint(endpoint) {
+		// Virtual-hosted-style: bucket is in hostname, object is the full path
+		bucket = extractBucketFromHost(endpoint)
+		// For virtual-hosted style, the entire path is the object key
+		object = strings.TrimPrefix(ep.Path, "/")
+		useAcceleration = true
+		klog.V(1).Infof("Using transfer acceleration endpoint")
+	} else {
+		// Path-style: bucket and object are both in path
+		path := strings.Trim(ep.Path, "/")
+		bucket, object = extractBucketAndObject(path)
+		useAcceleration = false
+	}
 
 	klog.V(1).Infof("bucket %s", bucket)
 	klog.V(1).Infof("object %s", object)
-	svc, err := newClientFunc(endpoint, accessKey, secKey, certDir, urlScheme)
+	svc, err := newClientFunc(endpoint, accessKey, secKey, certDir, urlScheme, useAcceleration)
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not build s3 client for %q", ep.Host)
 	}
@@ -167,7 +185,7 @@ func createS3Reader(ep *url.URL, accessKey, secKey string, certDir string) (io.R
 	return objectReader, nil
 }
 
-func getS3Client(endpoint, accessKey, secKey string, certDir string, urlScheme string) (S3Client, error) {
+func getS3Client(endpoint, accessKey, secKey string, certDir string, urlScheme string, useAcceleration bool) (S3Client, error) {
 	// Adding certs using CustomCABundle will overwrite the SystemCerts, so we opt by creating a custom HTTPClient
 	httpClient, err := createHTTPClient(certDir)
 
@@ -183,11 +201,29 @@ func getS3Client(endpoint, accessKey, secKey string, certDir string, urlScheme s
 		disableSSL = true
 	}
 
+	var awsEndpoint *string
+	var s3UseAccelerate *bool
+	var s3ForcePathStyle *bool
+
+	if useAcceleration {
+		// For transfer acceleration, don't set endpoint and use virtual-hosted style
+		awsEndpoint = nil
+		s3UseAccelerate = aws.Bool(true)
+		s3ForcePathStyle = aws.Bool(false)
+		klog.V(1).Infof("Configuring S3 client with transfer acceleration")
+	} else {
+		// For path-style or custom endpoints, keep existing behavior
+		awsEndpoint = aws.String(endpoint)
+		s3UseAccelerate = aws.Bool(false)
+		s3ForcePathStyle = aws.Bool(true)
+	}
+
 	sess, err := session.NewSession(&aws.Config{
 		Region:           aws.String(region),
-		Endpoint:         aws.String(endpoint),
+		Endpoint:         awsEndpoint,
 		Credentials:      creds,
-		S3ForcePathStyle: aws.Bool(true),
+		S3UseAccelerate:  s3UseAccelerate,
+		S3ForcePathStyle: s3ForcePathStyle,
 		HTTPClient:       httpClient,
 		DisableSSL:       &disableSSL,
 	},
@@ -217,4 +253,20 @@ func extractBucketAndObject(s string) (string, string) {
 	bucket := pathSplit[0]
 	object := strings.Join(pathSplit[1:], s3FolderSep)
 	return bucket, object
+}
+
+// extractBucketFromHost extracts the bucket name from the hostname for virtual-hosted-style URLs
+func extractBucketFromHost(host string) string {
+	// Extract bucket from hostname like "bucket-name.s3-accelerate.amazonaws.com"
+	parts := strings.Split(host, ".")
+	if len(parts) > 0 {
+		return parts[0]
+	}
+	return ""
+}
+
+// isTransferAccelerationEndpoint checks if the endpoint uses S3 Transfer Acceleration
+func isTransferAccelerationEndpoint(endpoint string) bool {
+	return strings.Contains(endpoint, s3AccelerateEndpoint) ||
+		strings.Contains(endpoint, s3AccelerateDualstackEndpoint)
 }

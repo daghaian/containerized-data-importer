@@ -183,8 +183,13 @@ var _ = Describe("S3 data source", func() {
 		Expect(ProcessingPhaseError).To(Equal(result))
 	})
 
-	It("GetS3Client should return a real client", func() {
-		_, err := getS3Client("", "", "", "", "")
+	It("GetS3Client should return a real client for path-style", func() {
+		_, err := getS3Client("", "", "", "", "", false)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("GetS3Client should return a real client with transfer acceleration", func() {
+		_, err := getS3Client("", "", "", "", "", true)
 		Expect(err).NotTo(HaveOccurred())
 	})
 
@@ -197,6 +202,37 @@ var _ = Describe("S3 data source", func() {
 		Expect(bucket).Should(Equal("Bucket1"))
 		Expect(object).Should(Equal("Folder1/Object.tmp"))
 	})
+
+	It("Should extract bucket from transfer acceleration hostname", func() {
+		bucket := extractBucketFromHost("my-bucket.s3-accelerate.amazonaws.com")
+		Expect(bucket).Should(Equal("my-bucket"))
+
+		bucket = extractBucketFromHost("test-bucket.s3-accelerate.dualstack.amazonaws.com")
+		Expect(bucket).Should(Equal("test-bucket"))
+
+		bucket = extractBucketFromHost("another-bucket-name.s3-accelerate.amazonaws.com")
+		Expect(bucket).Should(Equal("another-bucket-name"))
+	})
+
+	It("Should detect transfer acceleration endpoints", func() {
+		Expect(isTransferAccelerationEndpoint("my-bucket.s3-accelerate.amazonaws.com")).To(BeTrue())
+		Expect(isTransferAccelerationEndpoint("my-bucket.s3-accelerate.dualstack.amazonaws.com")).To(BeTrue())
+		Expect(isTransferAccelerationEndpoint("s3.us-east-1.amazonaws.com")).To(BeFalse())
+		Expect(isTransferAccelerationEndpoint("minio.local")).To(BeFalse())
+		Expect(isTransferAccelerationEndpoint("s3.amazonaws.com")).To(BeFalse())
+	})
+
+	It("NewS3DataSource should work with transfer acceleration endpoint", func() {
+		sd, err = NewS3DataSource("https://my-bucket.s3-accelerate.amazonaws.com/my-object.img", "", "", "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sd).NotTo(BeNil())
+	})
+
+	It("NewS3DataSource should work with transfer acceleration dualstack endpoint", func() {
+		sd, err = NewS3DataSource("https://test-bucket.s3-accelerate.dualstack.amazonaws.com/path/to/object.qcow2", "", "", "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sd).NotTo(BeNil())
+	})
 })
 
 // MockS3Client is a mock AWS S3 client
@@ -208,11 +244,11 @@ type MockS3Client struct {
 	doErr    bool
 }
 
-func failMockS3Client(endpoint, accKey, secKey string, certDir string, urlScheme string) (S3Client, error) {
+func failMockS3Client(endpoint, accKey, secKey string, certDir string, urlScheme string, useAcceleration bool) (S3Client, error) {
 	return nil, errors.New("Failed to create client")
 }
 
-func createMockS3Client(endpoint, accKey, secKey string, certDir string, urlScheme string) (S3Client, error) {
+func createMockS3Client(endpoint, accKey, secKey string, certDir string, urlScheme string, useAcceleration bool) (S3Client, error) {
 	return &MockS3Client{
 		accKey:  accKey,
 		secKey:  secKey,
@@ -221,7 +257,7 @@ func createMockS3Client(endpoint, accKey, secKey string, certDir string, urlSche
 	}, nil
 }
 
-func createErrMockS3Client(endpoint, accKey, secKey string, certDir string, urlScheme string) (S3Client, error) {
+func createErrMockS3Client(endpoint, accKey, secKey string, certDir string, urlScheme string, useAcceleration bool) (S3Client, error) {
 	return &MockS3Client{
 		doErr: true,
 	}, nil
