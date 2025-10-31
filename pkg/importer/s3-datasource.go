@@ -297,7 +297,7 @@ func isTransferAccelerationEndpoint(endpoint string) bool {
 		strings.Contains(endpoint, s3AccelerateDualstackEndpoint)
 }
 
-// getBucketRegion dynamically detects the bucket region using GetBucketLocation API
+// getBucketRegion dynamically detects the bucket region using HeadBucket API
 func getBucketRegion(bucketName string, accessKey, secKey, certDir, urlScheme string) (string, error) {
 	klog.V(1).Infof("Detecting region for bucket: %s", bucketName)
 
@@ -310,8 +310,8 @@ func getBucketRegion(bucketName string, accessKey, secKey, certDir, urlScheme st
 	creds := credentials.NewStaticCredentials(accessKey, secKey, "")
 	disableSSL := urlScheme == httpScheme
 
-	// Create a temporary session with the default region to make the GetBucketLocation call
-	// GetBucketLocation works from any region when using the default us-east-1
+	// Create a temporary session with the default region to make the HeadBucket call
+	// HeadBucket works from any region and returns the bucket region in the response headers
 	sess, err := session.NewSession(&aws.Config{
 		Region:      aws.String(s3DefaultRegion),
 		Credentials: creds,
@@ -323,19 +323,32 @@ func getBucketRegion(bucketName string, accessKey, secKey, certDir, urlScheme st
 	}
 
 	svc := s3.New(sess)
-	result, err := svc.GetBucketLocation(&s3.GetBucketLocationInput{
+
+	// Create the HeadBucket request
+	req, _ := svc.HeadBucketRequest(&s3.HeadBucketInput{
 		Bucket: aws.String(bucketName),
 	})
-	if err != nil {
-		return "", errors.Wrapf(err, "Failed to get bucket location for bucket: %s", bucketName)
-	}
 
-	// GetBucketLocation returns nil for us-east-1 buckets
+	// Send the request
+	err = req.Send()
+
+	// Extract region from the X-Amz-Bucket-Region response header
+	// This header is present in both success (200) and redirect (301) responses
 	region := s3DefaultRegion
-	if result.LocationConstraint != nil && *result.LocationConstraint != "" {
-		region = *result.LocationConstraint
+	if req.HTTPResponse != nil {
+		if bucketRegion := req.HTTPResponse.Header.Get("X-Amz-Bucket-Region"); bucketRegion != "" {
+			region = bucketRegion
+			klog.V(1).Infof("Detected region for bucket %s: %s", bucketName, region)
+			return region, nil
+		}
 	}
 
-	klog.V(1).Infof("Detected region for bucket %s: %s", bucketName, region)
+	// If we got an error and couldn't extract the region from headers, return the error
+	if err != nil {
+		return "", errors.Wrapf(err, "Failed to head bucket for bucket: %s", bucketName)
+	}
+
+	// If no error but no region header, use default
+	klog.V(1).Infof("No region header found for bucket %s, using default region %s", bucketName, region)
 	return region, nil
 }
