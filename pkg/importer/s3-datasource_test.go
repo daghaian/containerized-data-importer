@@ -22,6 +22,7 @@ var _ = Describe("S3 data source", func() {
 
 	BeforeEach(func() {
 		newClientFunc = createMockS3Client
+		getBucketRegionFunc = mockGetBucketRegion
 		tmpDir, err = os.MkdirTemp("", "scratch")
 		Expect(err).NotTo(HaveOccurred())
 		By("tmpDir: " + tmpDir)
@@ -29,6 +30,7 @@ var _ = Describe("S3 data source", func() {
 
 	AfterEach(func() {
 		newClientFunc = getS3Client
+		getBucketRegionFunc = getBucketRegion
 		if sd != nil {
 			sd.Close()
 		}
@@ -283,6 +285,12 @@ type MockS3Client struct {
 	secKey   string
 	certDir  string
 	doErr    bool
+}
+
+// MockGetBucketRegion is a variable that can be overridden in tests to simulate getBucketRegion
+var mockGetBucketRegion = func(bucketName string, accessKey, secKey, certDir, urlScheme string) (string, error) {
+	// Default mock implementation returns us-east-1
+	return "us-east-1", nil
 }
 
 func failMockS3Client(endpoint, accKey, secKey string, certDir string, urlScheme string, useAcceleration bool) (S3Client, error) {

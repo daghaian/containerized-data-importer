@@ -35,6 +35,7 @@ type S3Client interface {
 
 // may be overridden in tests
 var newClientFunc = getS3Client
+var getBucketRegionFunc = getBucketRegion
 
 // S3DataSource is the struct containing the information needed to import from an S3 data source.
 // Sequence of phases:
@@ -209,13 +210,24 @@ func getS3Client(endpoint, accessKey, secKey string, certDir string, urlScheme s
 
 	if useAcceleration {
 		// For transfer acceleration, don't set endpoint and use virtual-hosted style
-		// Transfer acceleration endpoints are global, so we use the default region
-		// The actual region doesn't affect routing since acceleration is global
+		// Dynamically detect the bucket region from the bucket name in the endpoint
 		awsEndpoint = nil
 		s3UseAccelerate = aws.Bool(true)
 		s3ForcePathStyle = aws.Bool(false)
-		region = s3DefaultRegion
-		klog.V(1).Infof("Configuring S3 client with transfer acceleration, using region %s", region)
+
+		// Extract bucket name from the transfer acceleration endpoint
+		bucketName := extractBucketFromHost(endpoint)
+		if bucketName == "" {
+			return nil, errors.New("Failed to extract bucket name from transfer acceleration endpoint")
+		}
+
+		// Dynamically detect the bucket region
+		detectedRegion, err := getBucketRegionFunc(bucketName, accessKey, secKey, certDir, urlScheme)
+		if err != nil {
+			return nil, errors.Wrapf(err, "Failed to detect region for bucket %q", bucketName)
+		}
+		region = detectedRegion
+		klog.V(1).Infof("Configuring S3 client with transfer acceleration, using dynamically detected region %s", region)
 	} else {
 		// For path-style or custom endpoints, extract region from endpoint
 		awsEndpoint = aws.String(endpoint)
@@ -283,4 +295,47 @@ func extractBucketFromHost(host string) string {
 func isTransferAccelerationEndpoint(endpoint string) bool {
 	return strings.Contains(endpoint, s3AccelerateEndpoint) ||
 		strings.Contains(endpoint, s3AccelerateDualstackEndpoint)
+}
+
+// getBucketRegion dynamically detects the bucket region using GetBucketLocation API
+func getBucketRegion(bucketName string, accessKey, secKey, certDir, urlScheme string) (string, error) {
+	klog.V(1).Infof("Detecting region for bucket: %s", bucketName)
+
+	// Create an HTTP client with custom certs if needed
+	httpClient, err := createHTTPClient(certDir)
+	if err != nil {
+		return "", errors.Wrap(err, "Error creating http client for region detection")
+	}
+
+	creds := credentials.NewStaticCredentials(accessKey, secKey, "")
+	disableSSL := urlScheme == httpScheme
+
+	// Create a temporary session with the default region to make the GetBucketLocation call
+	// GetBucketLocation works from any region when using the default us-east-1
+	sess, err := session.NewSession(&aws.Config{
+		Region:      aws.String(s3DefaultRegion),
+		Credentials: creds,
+		HTTPClient:  httpClient,
+		DisableSSL:  &disableSSL,
+	})
+	if err != nil {
+		return "", errors.Wrap(err, "Failed to create session for region detection")
+	}
+
+	svc := s3.New(sess)
+	result, err := svc.GetBucketLocation(&s3.GetBucketLocationInput{
+		Bucket: aws.String(bucketName),
+	})
+	if err != nil {
+		return "", errors.Wrapf(err, "Failed to get bucket location for bucket: %s", bucketName)
+	}
+
+	// GetBucketLocation returns nil for us-east-1 buckets
+	region := s3DefaultRegion
+	if result.LocationConstraint != nil && *result.LocationConstraint != "" {
+		region = *result.LocationConstraint
+	}
+
+	klog.V(1).Infof("Detected region for bucket %s: %s", bucketName, region)
+	return region, nil
 }
