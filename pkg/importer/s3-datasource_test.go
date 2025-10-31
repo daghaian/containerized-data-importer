@@ -191,7 +191,12 @@ var _ = Describe("S3 data source", func() {
 	})
 
 	It("GetS3Client should return a real client with transfer acceleration", func() {
-		_, err := getS3Client("", "", "", "", "", true)
+		// Override getBucketRegionFunc to avoid making actual AWS API calls
+		originalGetBucketRegionFunc := getBucketRegionFunc
+		getBucketRegionFunc = mockGetBucketRegion
+		defer func() { getBucketRegionFunc = originalGetBucketRegionFunc }()
+
+		_, err := getS3Client("my-bucket.s3-accelerate.amazonaws.com", "", "", "", "https", true)
 		Expect(err).NotTo(HaveOccurred())
 	})
 
@@ -264,10 +269,15 @@ var _ = Describe("S3 data source", func() {
 
 var _ = Describe("S3 client region configuration", func() {
 	It("Should configure correct region for transfer acceleration", func() {
+		// Override getBucketRegionFunc to avoid making actual AWS API calls
+		originalGetBucketRegionFunc := getBucketRegionFunc
+		getBucketRegionFunc = mockGetBucketRegion
+		defer func() { getBucketRegionFunc = originalGetBucketRegionFunc }()
+
 		client, err := getS3Client("my-bucket.s3-accelerate.amazonaws.com", "access", "secret", "", "https", true)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(client).NotTo(BeNil())
-		// The client should be configured with us-east-1 as the default region for transfer acceleration
+		// The client should be configured with the dynamically detected region
 	})
 
 	It("Should configure correct region for standard endpoints", func() {
